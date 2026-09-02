@@ -97,16 +97,23 @@ def run_seg(paths, save_dir):
 
 
 def read_store(db):
-    """Each annotation carries a shapely geometry and a properties dict."""
+    """Each annotation carries a shapely geometry and a properties dict.
+
+    `run()` hands back one entry per input image, but that entry is a list of .db
+    paths rather than a single path -- SQLiteStore was given the list and refused
+    it. Normalise to a list either way and read all of them.
+    """
     out = []
-    store = SQLiteStore(db)
-    for key, ann in store.items():
-        p = dict(ann.properties or {})
-        g = ann.geometry
-        out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
-                        prob=float(p.get('prob', 0) or 0),
-                        area_px=float(g.area),
-                        cx=float(g.centroid.x), cy=float(g.centroid.y)))
+    paths = [str(x) for x in db] if isinstance(db, (list, tuple)) else [str(db)]
+    for path in paths:
+        store = SQLiteStore(path)
+        for key, ann in store.items():
+            p = dict(ann.properties or {})
+            g = ann.geometry
+            out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
+                            prob=float(p.get('prob', 0) or 0),
+                            area_px=float(g.area),
+                            cx=float(g.centroid.x), cy=float(g.centroid.y)))
     return out
 
 
@@ -121,6 +128,11 @@ if PROBE:
     res = run_seg(paths, '/content/_probe')
     dt = time.time() - t0
     print('run() returned', type(res).__name__)
+    _k = next(iter(res)) if isinstance(res, dict) else 0
+    _v = res[_k] if isinstance(res, dict) else res[0]
+    print('  one entry:', type(_v).__name__,
+          ('len %d, first %s' % (len(_v), type(_v[0]).__name__))
+          if isinstance(_v, (list, tuple)) else str(_v)[:80])
     for p, db in _pairs(res, paths):
         nuc = read_store(db)
         im = cv2.imread(str(p))

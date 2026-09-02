@@ -203,18 +203,23 @@ def run_seg(seg, paths, save_dir):
 def read_store(db):
     \"\"\"AnnotationStore 取代了 1.x 的 joblib .dat。
 
-    每个 annotation 带一个 shapely 几何和一个 properties 字典。面积直接取多边形
-    面积，比 1.x 时用 bbox 面积更准。
+    每个 annotation 带一个 shapely 几何和一个 properties 字典，面积直接取多边形
+    面积，比 1.x 用 bbox 更准。
+
+    run() 每张图返回的是一个 .db 路径**列表**而不是单个路径 —— 直接把列表丢给
+    SQLiteStore 会被拒。两种形态都归一成列表再读。
     \"\"\"
     out = []
-    store = SQLiteStore(db)
-    for key, ann in store.items():
-        p = dict(ann.properties or {})
-        g = ann.geometry
-        out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
-                        prob=float(p.get('prob', 0) or 0),
-                        area_px=float(g.area),
-                        cx=float(g.centroid.x), cy=float(g.centroid.y)))
+    paths = [str(x) for x in db] if isinstance(db, (list, tuple)) else [str(db)]
+    for path in paths:
+        store = SQLiteStore(path)
+        for key, ann in store.items():
+            p = dict(ann.properties or {})
+            g = ann.geometry
+            out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
+                            prob=float(p.get('prob', 0) or 0),
+                            area_px=float(g.area),
+                            cx=float(g.centroid.x), cy=float(g.centroid.y)))
     return out
 
 
