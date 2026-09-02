@@ -192,6 +192,7 @@ else:
         w.writerow(['source', 'id', 'inst_id', 'type', 'type_name',
                     'area_px', 'cx', 'cy', 'prob'])
     t0 = time.time()
+    skipped = []
     for src in sorted(os.listdir(os.path.join(root, 'crops_hv'))):
         d = os.path.join(root, 'crops_hv', src)
         files = sorted(f for f in os.listdir(d) if f.endswith('.png'))
@@ -214,7 +215,34 @@ else:
             if os.path.exists(save):
                 shutil.rmtree(save)
             paths = [os.path.join(d, f) for f in part]
-            res = run_seg(paths, save)
+            try:
+                res = run_seg(paths, save)
+            except Exception as e:
+                # tiatoolbox raised KeyError('contours') in dict_to_json_store on the
+                # MoNuSAC model after nearly two hours, taking the whole source with
+                # it. Three of the sources that did finish came back one region short,
+                # which points at regions where nothing was detected: no contours key
+                # to pop. Retry the chunk one image at a time so a single such region
+                # costs itself and not the nineteen around it.
+                print('  chunk failed (%s: %s); retrying singly'
+                      % (type(e).__name__, e), flush=True)
+                res, kept = {}, []
+                for one in paths:
+                    sd1 = save + '_' + os.path.basename(one)[:-4]
+                    if os.path.exists(sd1):
+                        shutil.rmtree(sd1)
+                    try:
+                        r1 = run_seg([one], sd1)
+                    except Exception as e1:
+                        print('    skipped %s (%s)'
+                              % (os.path.basename(one), type(e1).__name__), flush=True)
+                        skipped.append((src, os.path.basename(one), str(e1)[:80]))
+                        continue
+                    for k1, v1 in (r1.items() if isinstance(r1, dict)
+                                   else zip([one], r1)):
+                        res[k1] = v1
+                    kept.append(one)
+                paths = kept
             for p, db in _pairs(res, paths):
                 rid = os.path.splitext(os.path.basename(str(p)))[0]
                 for v in read_store(db):
@@ -232,4 +260,8 @@ else:
               % (src, len(todo), n, time.time() - t0), flush=True)
     fh.close()
     print()
+    if skipped:
+        print('%d region(s) skipped:' % len(skipped))
+        for a, b, c in skipped:
+            print('  %s/%s  %s' % (a, b, c))
     print('-> ' + out_csv)
