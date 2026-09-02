@@ -96,12 +96,29 @@ def run_seg(paths, save_dir):
                        **kw)
 
 
+NAME_TO_CODE = {v.lower(): k for k, v in TYPE_NAMES.items()}
+_dumped = [False]
+
+
+def _num(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def read_store(db):
     """Each annotation carries a shapely geometry and a properties dict.
 
-    `run()` hands back one entry per input image, but that entry is a list of .db
-    paths rather than a single path -- SQLiteStore was given the list and refused
-    it. Normalise to a list either way and read all of them.
+    Two shapes this had to be taught, both found by looking rather than guessing:
+
+    `run()` hands back one entry per image, and that entry is a *list* of .db paths
+    rather than a single path -- SQLiteStore was given the list and refused it.
+
+    `type` is a class *name* string ('Neoplastic'), not the integer 1.x used, so
+    int() on it raised. The name is the authoritative field here; the numeric code
+    is derived where the name is one we know and left at -1 otherwise, rather than
+    forcing a number the store never gave.
     """
     out = []
     paths = [str(x) for x in db] if isinstance(db, (list, tuple)) else [str(db)]
@@ -109,9 +126,21 @@ def read_store(db):
         store = SQLiteStore(path)
         for key, ann in store.items():
             p = dict(ann.properties or {})
+            if not _dumped[0]:
+                _dumped[0] = True
+                print('  annotation properties:', {k: type(v).__name__
+                                                   for k, v in p.items()})
+                print('  first values:', {k: str(v)[:24] for k, v in p.items()})
+            t = p.get('type', p.get('class', 0))
+            if isinstance(t, str):
+                name, code = t, NAME_TO_CODE.get(t.lower(), -1)
+            else:
+                code = int(_num(t))
+                name = TYPE_NAMES.get(code, str(code))
             g = ann.geometry
-            out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
-                            prob=float(p.get('prob', 0) or 0),
+            out.append(dict(key=str(key), type=code, type_name=name,
+                            prob=_num(p.get('prob', p.get('probability',
+                                                          p.get('score', 0)))),
                             area_px=float(g.area),
                             cx=float(g.centroid.x), cy=float(g.centroid.y)))
     return out
@@ -139,8 +168,7 @@ if PROBE:
         mm2 = im.shape[0] * im.shape[1] * HV_MPP ** 2 / 1e6
         tc = {}
         for v in nuc:
-            k = TYPE_NAMES.get(v['type'], v['type'])
-            tc[k] = tc.get(k, 0) + 1
+            tc[v['type_name']] = tc.get(v['type_name'], 0) + 1
         print('%-16s %5d nuclei  %7.0f /mm2   %s'
               % (os.path.basename(str(p)), len(nuc), len(nuc) / mm2, tc))
     print()
@@ -181,8 +209,7 @@ else:
         for p, db in _pairs(res, paths):
             rid = os.path.splitext(os.path.basename(str(p)))[0]
             for v in read_store(db):
-                w.writerow([src, rid, v['key'], v['type'],
-                            TYPE_NAMES.get(v['type'], v['type']),
+                w.writerow([src, rid, v['key'], v['type'], v['type_name'],
                             round(v['area_px'], 1), round(v['cx'], 1),
                             round(v['cy'], 1), round(v['prob'], 3)])
                 n += 1
