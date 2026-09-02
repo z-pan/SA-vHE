@@ -1,0 +1,38 @@
+# Model weights. Individual .pth files here are 208 MB, over GitHub's 100 MB hard
+# limit, and the directory totals 19 GB. They are distributed as Release assets
+# instead (2 GB per file, and they do not count against repository size).
+checkpoints/
+
+# Data. Nothing derived from patient material belongs in a public repository:
+# slides, patches, masks, mosaics, and every intermediate built from them.
+datasets/
+results/
+images/
+processing/
+*.tif
+*.tiff
+*.ndpi
+*.svs
+*.zip
+
+# Large third-party artefacts
+inception-2015-12-05.pt
+fid_metric/
+
+# Per-run bookkeeping that names local absolute paths
+_jobs.json
+conch_slide*.csv
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.code-workspace
+
+# Stray model weights and figures at the repo root
+*.pt
+*.pth
+*.png
+*.jpg
+*.jpeg
+*.pptx
+*.xlsx
