@@ -45,16 +45,19 @@ md("""
 本机 RTX 3050 Ti (4 GB) 上 **51 秒/区**，888 区约 12.6 小时。
 
 瓶颈**不是显存，是分水岭后处理**（51 秒里约 35 秒），受限于 CPU 核数。
-所以 A100 带来的主要收益其实是**运行时附带的 12 个 vCPU**，而不是显卡本身 ——
-换句话说，别指望 A100 把时间按显卡算力等比缩短；真正决定总时长的是 `N_POST`。
+所以 A100 带来的主要收益其实是**运行时附带的 12 个 vCPU**，而不是显卡本身。
 
-## 两个已踩过的坑，本 notebook 已处理
+## 三个已踩过的坑，本 notebook 已处理
+
 1. **输入分辨率**。HoVer-Net PanNuke 训练在 **0.25 µm/px**。直接喂 0.621 µm/px 的图
    只检出 110–626 核/mm²，重采样后 467–1742（**2–7 倍**），而且**不报任何错**。
-   压缩包里的 crop 已在本地按各自的 µm/px 重采样到 0.25，`crop_scale.csv` 记录换算。
-   真实 H&E 侧的 µm/px 逐区在 0.44–0.77 之间变，所以这一步不能"统一乘一个数"。
-2. **多进程**。Windows 上必须 `__main__` 保护，否则 worker 重复导入、死锁在空缓存目录。
-   Colab 是 Linux fork，无此问题，但 worker 数要匹配 vCPU，见 §4。
+   压缩包里的 crop 已在本地按各自的 µm/px 重采样到 0.25 —— 真实 H&E 侧的 µm/px
+   逐区在 0.44–0.77 之间变，所以这一步不能"统一乘一个数"。
+   这里再用 `units='baseline'` 让模型 1:1 读像素，不做第二次缩放。
+2. **tiatoolbox 2.x 换了整套 API**。`pretrained_model=` → `model=`（位置参数），
+   `.predict()` → `.run()`，`mode='tile'` → `patch_mode=False`，
+   输出从 joblib `.dat` 换成 AnnotationStore `.db`。1.x 装不上（要求 Python <3.12）。
+3. **多进程**。Windows 上必须 `__main__` 保护；Colab 是 Linux fork，无此问题。
 """)
 
 md("""
@@ -62,10 +65,9 @@ md("""
 
 需要 GPU：菜单 → 代码执行程序 → 更改运行时类型 → **A100 GPU**。
 
-本 notebook 的 worker 数和 batch 已按 A100 运行时（约 12 vCPU / 83 GB）设定。
-若实际拿到的是 T4（约 2 vCPU / 12 GB），把 §4 的 `N_POST` 降到 2、`BATCH` 降到 8。
-
 下一格会打印实际的 vCPU 数和显存 —— **以它为准**，不要假设。
+A100 运行时约 12 vCPU / 83 GB；若拿到 T4（约 2 vCPU / 12 GB），把 §4 的
+`NW` 降到 2、`BATCH` 降到 8。
 """)
 code("""
 !nvidia-smi --query-gpu=name,memory.total --format=csv
@@ -77,39 +79,39 @@ print('vCPU:', multiprocessing.cpu_count())
 md("""
 ## 2. 安装 tiatoolbox
 
-**不固定版本。** 原先钉在 1.5.1 是为了和本机一致，但 Colab 的 Python 已是 3.12+，
-而 1.x 全系要求 `<3.12`，装不上。可用的只有 2.x。
+**不固定版本。** Colab 的 Python 是 3.12+，而 tiatoolbox 1.x 全系要求 `<3.12`，
+装不上；可用的只有 2.x。
 
-这不影响可比性：**所有 HoVer-Net 结果都来自这里**，本机那次 1.5.1 只是冒烟测试，不进结果。
-真正要守的是「所有来源用同一个版本跑完」，下一格会把版本号打出来，记下它。
+这不影响可比性：**所有 HoVer-Net 结果都来自这里**，本机那次 1.5.1 只是冒烟测试、
+不进结果。要守的是「六个来源用同一个版本跑完」，下一格会打印版本号，记下它。
 
-⚠️ 2.0 有两处破坏性改动（`on_gpu=` → `device=`，`.predict()` → `.run()`），
-§4 的适配层两种都试，不用你操心。
-
-装完**需要重启运行时**。重启后从 §3 继续。
+装完**需要重启会话**（菜单 → 代码执行程序 → 重新启动会话）。重启后从 §3 继续。
 """)
 code("""
 !pip -q install "tiatoolbox>=2.0" 2>&1 | tail -5
 
-# pip 失败不会让 cell 报错，所以在这里自己验一次 —— 上一版无条件打印「装好了」，
-# 结果版本解析失败时也照样说成功。
-import importlib, subprocess, sys
+# pip 失败不会让 cell 报错。上一版在这里无条件打印「装好了」，于是装失败时
+# 报错和成功提示一起出现 —— 谎报成功比报错更危险，因为人会带着错误前提往下走。
+import importlib, sys
 try:
     m = importlib.import_module('tiatoolbox')
     print()
     print('tiatoolbox', m.__version__, '安装成功')
-    print('-> 点「代码执行程序 → 重启会话」，然后从 §3 继续')
+    print('-> 菜单 → 代码执行程序 → 重新启动会话，然后从 §3 继续')
 except Exception as e:
     print()
     print('安装失败:', e)
-    print('别继续。把上面 pip 的报错发出来。')
-    sys.exit(1)
+    print('别继续，把上面 pip 的报错发出来。')
+    raise
 """)
 
 md("""
 ## 3. 挂载 Drive 并解压
 
 把本地的 `crops_hv.zip`（1.46 GB）上传到 Drive，路径填进 `ZIP`。
+
+重启会话后变量会清空，**这一格要重跑**；`/content` 下的文件还在，
+所以解压那步第二次会很快。
 """)
 code("""
 from google.colab import drive
@@ -121,12 +123,15 @@ OUT = '/content/drive/MyDrive/ch5_downstream'                # 结果写回这�
 import os, zipfile, time
 os.makedirs(OUT, exist_ok=True)
 assert os.path.exists(ZIP), '找不到 ' + ZIP
-t0 = time.time()
-with zipfile.ZipFile(ZIP) as z:
-    z.extractall('/content/work')
-print('解压完成 %.0fs' % (time.time() - t0))
-
 root = '/content/work'
+if not os.path.isdir(root + '/crops_hv'):
+    t0 = time.time()
+    with zipfile.ZipFile(ZIP) as z:
+        z.extractall(root)
+    print('解压完成 %.0fs' % (time.time() - t0))
+else:
+    print('已解压，跳过')
+
 for s in sorted(os.listdir(root + '/crops_hv')):
     print('  %-14s %d 张' % (s, len(os.listdir(root + '/crops_hv/' + s))))
 """)
@@ -136,77 +141,89 @@ md("""
 
 先用 4 个区确认三件事，再开全量：
 
-1. 权重能下载、模型能跑
-2. **每区耗时** —— 推算全量时间，判断会不会撞上 Colab 会话上限
-3. **核密度是否合理** —— 真实 H&E 在 0.25 µm/px 下应为数百到两千核/mm²。
-   若只有一两百，说明分辨率又错了，**立刻停下来查**，不要开全量
+1. 权重能下载、模型能跑、输出能解析
+2. **每区耗时** —— 推算全量时间
+3. **核密度是否合理** —— 真实 H&E 在 0.25 µm/px 下应为**数百到两千核/mm²**。
+   若只有一两百，说明分辨率环节又出了问题，**停下来查**，不要开全量
+
+本机在同样的图上量到 467–1742 /mm²，可作对照。
 """)
 code("""
-import os, csv, time, joblib, cv2, tiatoolbox
-from tiatoolbox.models import NucleusInstanceSegmentor
+import os, csv, time, cv2, numpy as np, tiatoolbox
+from packaging.version import Version
 
 print('tiatoolbox', tiatoolbox.__version__, '<- 记下这个版本号，所有来源必须同一个')
+assert Version(tiatoolbox.__version__) >= Version('2.0'), \\
+    '本 notebook 按 2.x API 写；1.x 请用旧版 notebook'
+
+from tiatoolbox.models.engine.multi_task_segmentor import MultiTaskSegmentor
+from tiatoolbox.annotation.storage import SQLiteStore
 
 TYPE_NAMES = {0: 'background', 1: 'neoplastic', 2: 'inflammatory',
               3: 'connective', 4: 'dead', 5: 'epithelial'}
 HV_MPP = 0.25
-N_POST = min(8, max(1, os.cpu_count() - 2))   # 后处理是瓶颈，留 2 核给数据加载
-BATCH = 32                                     # A100 显存充裕；T4 上改回 8
+NW = min(8, max(1, os.cpu_count() - 2))
+BATCH = 32                       # A100 显存充裕；T4 上改回 8
 
-
-def make_seg(model='hovernet_fast-pannuke'):
-    \"\"\"2.0 起构造器接受 device=，1.x 不接受；两种都试。\"\"\"
-    kw = dict(pretrained_model=model, num_loader_workers=2,
-              num_postproc_workers=N_POST, batch_size=BATCH,
-              auto_generate_mask=False)
-    try:
-        return NucleusInstanceSegmentor(device='cuda', **kw)
-    except TypeError:
-        return NucleusInstanceSegmentor(**kw)
+# 2.1.3 签名: MultiTaskSegmentor(model, batch_size=8, num_workers=0,
+#                                weights=None, *, device='cpu', verbose=True)
+# NucleusInstanceSegmentor 是它的 deprecated 包装，直接用父类。
+seg = MultiTaskSegmentor(model='hovernet_fast-pannuke', batch_size=BATCH,
+                         num_workers=NW, device='cuda', verbose=False)
+print('workers: %d, batch: %d' % (NW, BATCH))
 
 
 def run_seg(seg, paths, save_dir):
-    \"\"\"2.0 把 predict() 改名 run()、on_gpu= 改成 device=。
+    \"\"\"patch_mode=False 是 2.x 里 mode='tile' 的对应物 —— 图比模型的输入块大。
 
-    两个名字都试，因为 Colab 装到哪个大版本不由我们决定，而调错的表现是
-    TypeError 而不是安静的错误结果 —— 这一点比大多数别的坑友好。
+    input_resolutions 用 baseline: crop 已经在本地重采样到 0.25 um/px 了,
+    再让引擎按 mpp 缩放一次就会缩两次。PNG 也没有 mpp 元数据可读。
     \"\"\"
-    for call in (
-        lambda: seg.run(paths, mode='tile', device='cuda',
-                        crash_on_exception=True, save_dir=save_dir),
-        lambda: seg.predict(paths, mode='tile', on_gpu=True,
-                            crash_on_exception=True, save_dir=save_dir),
-    ):
-        try:
-            return call()
-        except (AttributeError, TypeError):
-            continue
-    raise RuntimeError('predict/run 两种调用都不被接受，检查 tiatoolbox 版本')
+    return seg.run(paths, patch_mode=False, save_dir=save_dir, overwrite=True,
+                   input_resolutions=[{'units': 'baseline', 'resolution': 1.0}],
+                   output_type='annotationstore')
 
 
-seg = make_seg()
-print('后处理 worker: %d, batch: %d' % (N_POST, BATCH))
+def read_store(db):
+    \"\"\"AnnotationStore 取代了 1.x 的 joblib .dat。
+
+    每个 annotation 带一个 shapely 几何和一个 properties 字典。面积直接取多边形
+    面积，比 1.x 时用 bbox 面积更准。
+    \"\"\"
+    out = []
+    store = SQLiteStore(db)
+    for key, ann in store.items():
+        p = dict(ann.properties or {})
+        g = ann.geometry
+        out.append(dict(key=str(key), type=int(p.get('type', 0) or 0),
+                        prob=float(p.get('prob', 0) or 0),
+                        area_px=float(g.area),
+                        cx=float(g.centroid.x), cy=float(g.centroid.y)))
+    return out
+
 
 d = root + '/crops_hv/real_HE'
 probe = [os.path.join(d, f) for f in sorted(os.listdir(d))[:4]]
 t0 = time.time()
 res = run_seg(seg, probe, '/content/_probe')
 dt = time.time() - t0
+print()
+print('run() 返回类型:', type(res).__name__)
 
-for p, rr in res:
-    dat = joblib.load(rr + '.dat')
-    im = cv2.imread(p)
+items = res.items() if isinstance(res, dict) else zip(probe, res)
+for p, db in items:
+    nuc = read_store(db)
+    im = cv2.imread(str(p))
     mm2 = im.shape[0] * im.shape[1] * HV_MPP ** 2 / 1e6
     tc = {}
-    for v in dat.values():
+    for v in nuc:
         k = TYPE_NAMES.get(v['type'], v['type'])
         tc[k] = tc.get(k, 0) + 1
     print('%-16s %5d 核  %7.0f /mm2   %s'
-          % (os.path.basename(p), len(dat), len(dat) / mm2, tc))
+          % (os.path.basename(str(p)), len(nuc), len(nuc) / mm2, tc))
 print()
 print('%.1f s/区  ->  888 区约 %.1f 小时' % (dt / len(probe), 888 * dt / len(probe) / 3600))
-print()
-print('A100 + 12 vCPU 上预计 1-2 小时；若 > 8 小时，在 §5 设 SUBSET 只跑一部分区')
+print('本机对照: 467-1742 /mm2。若这里只有一两百，先别开全量。')
 """)
 
 md("""
@@ -220,7 +237,7 @@ Colab 会掉线。本格**每个来源跑完就把 CSV 追加写回 Drive 并 fs
 code("""
 SUBSET = 0          # 0 = 全部 148 区。A100 下应该不需要缩减
 
-import os, csv, time, shutil, joblib
+import os, csv, time, shutil
 
 out_csv = os.path.join(OUT, 'hv_hovernet_fast_pannuke.csv')
 done = set()
@@ -250,17 +267,17 @@ for src in sorted(os.listdir(root + '/crops_hv')):
     save = '/content/_hv/' + src
     if os.path.exists(save):
         shutil.rmtree(save)
-    res = run_seg(seg, [os.path.join(d, f) for f in todo], save)
+    paths = [os.path.join(d, f) for f in todo]
+    res = run_seg(seg, paths, save)
+    items = res.items() if isinstance(res, dict) else zip(paths, res)
     n = 0
-    for p, rr in res:
-        rid = os.path.splitext(os.path.basename(p))[0]
-        for k, v in joblib.load(rr + '.dat').items():
-            bb = v['box']
-            w.writerow([src, rid, k, v['type'], TYPE_NAMES.get(v['type'], v['type']),
-                        int(bb[2] - bb[0]) * int(bb[3] - bb[1]),
-                        round(float(v['centroid'][0]), 1),
-                        round(float(v['centroid'][1]), 1),
-                        round(float(v.get('prob', 0) or 0), 3)])
+    for p, db in items:
+        rid = os.path.splitext(os.path.basename(str(p)))[0]
+        for v in read_store(db):
+            w.writerow([src, rid, v['key'], v['type'],
+                        TYPE_NAMES.get(v['type'], v['type']),
+                        round(v['area_px'], 1), round(v['cx'], 1),
+                        round(v['cy'], 1), round(v['prob'], 3)])
             n += 1
     fh.flush()
     os.fsync(fh.fileno())
@@ -278,7 +295,7 @@ md("""
 
 - **各来源核密度**：`real_HE` 是参照，vHE 各变体应在同一量级
 - **type=0 (未分类) 占比**：PanNuke 的 0 类表示模型没给出类型。占比过高说明置信度不足，
-  后续 5 类分布对比就得加置信度门槛；而且这个占比在真实与虚拟上可能不同，本身即是信息
+  后续 5 类分布对比就得加门槛；而且这个占比在真实与虚拟上可能不同，本身即是信息
 - **5 类构成**：vHE 的核类型分布是否与真实 H&E 一致 —— 比"数量对得上"更强的证据
 """)
 code("""
@@ -320,16 +337,17 @@ RUN_SECOND = False   # 改 True 再运行
 if not RUN_SECOND:
     print('跳过')
 else:
-    seg2 = make_seg('hovernet_fast-monusac')
+    seg2 = MultiTaskSegmentor(model='hovernet_fast-monusac', batch_size=BATCH,
+                              num_workers=NW, device='cuda', verbose=False)
     out2 = os.path.join(OUT, 'hv_hovernet_fast_monusac.csv')
     done2 = set()
     if os.path.exists(out2):
-        with open(out2) as fh2:
-            for r in csv.DictReader(fh2):
+        with open(out2) as f2:
+            for r in csv.DictReader(f2):
                 done2.add((r['source'], r['id']))
     new2 = not os.path.exists(out2)
-    fh2 = open(out2, 'w' if new2 else 'a', newline='')
-    w2 = csv.writer(fh2)
+    f2 = open(out2, 'w' if new2 else 'a', newline='')
+    w2 = csv.writer(f2)
     if new2:
         w2.writerow(['source', 'id', 'inst_id', 'type', 'type_name',
                      'area_px', 'cx', 'cy', 'prob'])
@@ -344,20 +362,19 @@ else:
         save = '/content/_hv2/' + src
         if os.path.exists(save):
             shutil.rmtree(save)
-        res = run_seg(seg2, [os.path.join(d, f) for f in todo], save)
-        for p, rr in res:
-            rid = os.path.splitext(os.path.basename(p))[0]
-            for k, v in joblib.load(rr + '.dat').items():
-                bb = v['box']
-                w2.writerow([src, rid, k, v['type'], str(v['type']),
-                             int(bb[2] - bb[0]) * int(bb[3] - bb[1]),
-                             round(float(v['centroid'][0]), 1),
-                             round(float(v['centroid'][1]), 1),
-                             round(float(v.get('prob', 0) or 0), 3)])
-        fh2.flush()
-        os.fsync(fh2.fileno())
+        paths = [os.path.join(d, f) for f in todo]
+        res = run_seg(seg2, paths, save)
+        items = res.items() if isinstance(res, dict) else zip(paths, res)
+        for p, db in items:
+            rid = os.path.splitext(os.path.basename(str(p)))[0]
+            for v in read_store(db):
+                w2.writerow([src, rid, v['key'], v['type'], str(v['type']),
+                             round(v['area_px'], 1), round(v['cx'], 1),
+                             round(v['cy'], 1), round(v['prob'], 3)])
+        f2.flush()
+        os.fsync(f2.fileno())
         print('%s done' % src, flush=True)
-    fh2.close()
+    f2.close()
     print('-> ' + out2)
 """)
 
@@ -373,6 +390,9 @@ UTOM-master/results/path_screen/survey/_downstream/hv_hovernet_fast_pannuke.csv
 本地的 Cellpose 结果（7 个来源，**含 TPAF 原图**）会与它合并出最终对比表。
 TPAF 那一列是关键 —— 它给出"这个视野里究竟有多少核"，独立于任何染色，
 是判断 vHE 保留了多少、H&E 工具找回了多少的参照。
+
+⚠️ `area_px` 在 2.x 下是**多边形面积**，1.x 是 bbox 面积，两者不可混用。
+本次全部来自 2.x，内部一致。
 """)
 
 nb = {
