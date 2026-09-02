@@ -10,14 +10,26 @@ import json
 CELLS = []
 
 
+def lines(text):
+    """Split for the .ipynb `source` field, which wants the newlines kept.
+
+    A plain split drops them, and Jupyter then joins the list into one line: every
+    statement in a cell runs together, and the first cell -- which starts with a
+    `!nvidia-smi` shell escape -- comes back as a bash syntax error on what is
+    perfectly good code. The newline belongs to every line but the last.
+    """
+    ls = text.strip('\n').split('\n')
+    return [l + '\n' for l in ls[:-1]] + [ls[-1]]
+
+
 def md(text):
     CELLS.append({'cell_type': 'markdown', 'metadata': {},
-                  'source': text.strip('\n').split('\n')})
+                  'source': lines(text)})
 
 
 def code(text):
     CELLS.append({'cell_type': 'code', 'metadata': {}, 'execution_count': None,
-                  'outputs': [], 'source': text.strip('\n').split('\n')})
+                  'outputs': [], 'source': lines(text)})
 
 
 md("""
