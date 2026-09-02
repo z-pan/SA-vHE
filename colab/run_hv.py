@@ -63,15 +63,37 @@ def run_seg(paths, save_dir):
     """patch_mode=False is what 1.x called mode='tile': the image is larger than
     the model's input tile.
 
-    input_resolutions is pinned to baseline. The crops were already resampled to
-    0.25 um/px locally, per region -- the real H&E crops are stored at 512x512
-    whatever their physical extent, so their scale runs 0.44-0.77 um/px and no
-    single factor covers them. Letting the engine scale by mpp on top would scale
-    twice, and a PNG carries no mpp for it to read anyway.
+    Two things a PNG needs spelled out.
+
+    Scale. The crops were already resampled to 0.25 um/px locally, per region --
+    the real H&E crops are stored at 512x512 whatever their physical extent, so
+    their scale runs 0.44-0.77 um/px and no single factor covers them. A PNG has
+    no mpp for the reader to find, so `wsireader_kwargs` supplies it. Declaring
+    0.25 and requesting 0.25 leaves the scale at 1.0, which is what we want, and
+    unlike `units='baseline'` it also makes the annotation coordinates meaningful.
+
+    Tissue mask. With patch_mode=False the engine tries to build one via
+    `wsireader.tissue_mask()`, which needs objective power or mpp and raised
+    "MPP is None" on these files. Supplying mpp above would fix that too, but the
+    mask is not wanted: these crops are already chosen regions, and letting a
+    thresholder drop parts of them would silently remove nuclei from the count on
+    some sources more than others.
     """
-    return seg.run(paths, patch_mode=False, save_dir=save_dir, overwrite=True,
-                   input_resolutions=[{'units': 'baseline', 'resolution': 1.0}],
-                   output_type='annotationstore')
+    kw = dict(patch_mode=False, save_dir=save_dir, overwrite=True,
+              output_type='annotationstore', auto_get_mask=False)
+    try:
+        return seg.run(paths,
+                       input_resolutions=[{'units': 'mpp', 'resolution': HV_MPP}],
+                       wsireader_kwargs={'mpp': (HV_MPP, HV_MPP), 'power': 40},
+                       **kw)
+    except (TypeError, ValueError) as e:
+        # Fall back to reading the pixels 1:1 with no scale declared at all. Same
+        # sampling, less metadata; kept because both routes are documented and the
+        # engine's acceptance of wsireader_kwargs varies by reader.
+        print('mpp route failed (%s); falling back to baseline' % e)
+        return seg.run(paths,
+                       input_resolutions=[{'units': 'baseline', 'resolution': 1.0}],
+                       **kw)
 
 
 def read_store(db):

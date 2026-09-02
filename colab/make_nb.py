@@ -53,7 +53,7 @@ md("""
    只检出 110–626 核/mm²，重采样后 467–1742（**2–7 倍**），而且**不报任何错**。
    压缩包里的 crop 已在本地按各自的 µm/px 重采样到 0.25 —— 真实 H&E 侧的 µm/px
    逐区在 0.44–0.77 之间变，所以这一步不能"统一乘一个数"。
-   这里再用 `units='baseline'` 让模型 1:1 读像素，不做第二次缩放。
+   这里用 wsireader_kwargs 把 0.25 告诉 reader（PNG 没有 mpp 元数据），并关掉自动组织 mask。
 2. **tiatoolbox 2.x 换了整套 API**。`pretrained_model=` → `model=`（位置参数），
    `.predict()` → `.run()`，`mode='tile'` → `patch_mode=False`，
    输出从 joblib `.dat` 换成 AnnotationStore `.db`。1.x 装不上（要求 Python <3.12）。
@@ -174,14 +174,30 @@ print('workers: %d, batch: %d' % (NW, BATCH))
 
 
 def run_seg(seg, paths, save_dir):
-    \"\"\"patch_mode=False 是 2.x 里 mode='tile' 的对应物 —— 图比模型的输入块大。
+    \"\"\"patch_mode=False 是 2.x 里 mode='tile' 的对应物 —— 图比模型输入块大。
 
-    input_resolutions 用 baseline: crop 已经在本地重采样到 0.25 um/px 了,
-    再让引擎按 mpp 缩放一次就会缩两次。PNG 也没有 mpp 元数据可读。
+    PNG 要额外交代两件事：
+
+    尺度。crop 已在本地按逐区 µm/px 重采样到 0.25，但 PNG 里没有 mpp 元数据，
+    所以用 wsireader_kwargs 告诉它。声明 0.25、请求 0.25，缩放就是 1.0。
+
+    组织 mask。patch_mode=False 会自动调 wsireader.tissue_mask() 建 mask，
+    那需要 mpp 或 objective power，在这些文件上报了 \"MPP is None\"。
+    但我们本来也不想要这个 mask —— crop 已经是挑好的区域，让阈值器再砍一刀
+    会在不同来源上砍掉不同比例的核。
     \"\"\"
-    return seg.run(paths, patch_mode=False, save_dir=save_dir, overwrite=True,
-                   input_resolutions=[{'units': 'baseline', 'resolution': 1.0}],
-                   output_type='annotationstore')
+    kw = dict(patch_mode=False, save_dir=save_dir, overwrite=True,
+              output_type='annotationstore', auto_get_mask=False)
+    try:
+        return seg.run(paths,
+                       input_resolutions=[{'units': 'mpp', 'resolution': HV_MPP}],
+                       wsireader_kwargs={'mpp': (HV_MPP, HV_MPP), 'power': 40},
+                       **kw)
+    except (TypeError, ValueError) as e:
+        print('mpp route failed (%s); falling back to baseline' % e)
+        return seg.run(paths,
+                       input_resolutions=[{'units': 'baseline', 'resolution': 1.0}],
+                       **kw)
 
 
 def read_store(db):
