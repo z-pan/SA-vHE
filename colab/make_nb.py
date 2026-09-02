@@ -77,14 +77,33 @@ print('vCPU:', multiprocessing.cpu_count())
 md("""
 ## 2. 安装 tiatoolbox
 
-固定 1.5.1，与本地一致。换版本可能改动后处理细节，那样 Colab 与本地结果不可比。
+**不固定版本。** 原先钉在 1.5.1 是为了和本机一致，但 Colab 的 Python 已是 3.12+，
+而 1.x 全系要求 `<3.12`，装不上。可用的只有 2.x。
 
-装完**需要重启运行时**（它会改 numpy/torch）。重启后从 §3 继续，本格不用重跑。
+这不影响可比性：**所有 HoVer-Net 结果都来自这里**，本机那次 1.5.1 只是冒烟测试，不进结果。
+真正要守的是「所有来源用同一个版本跑完」，下一格会把版本号打出来，记下它。
+
+⚠️ 2.0 有两处破坏性改动（`on_gpu=` → `device=`，`.predict()` → `.run()`），
+§4 的适配层两种都试，不用你操心。
+
+装完**需要重启运行时**。重启后从 §3 继续。
 """)
 code("""
-!pip -q install tiatoolbox==1.5.1 2>&1 | tail -5
-print()
-print('装好了 —— 点「代码执行程序 → 重启会话」，然后从 §3 继续')
+!pip -q install "tiatoolbox>=2.0" 2>&1 | tail -5
+
+# pip 失败不会让 cell 报错，所以在这里自己验一次 —— 上一版无条件打印「装好了」，
+# 结果版本解析失败时也照样说成功。
+import importlib, subprocess, sys
+try:
+    m = importlib.import_module('tiatoolbox')
+    print()
+    print('tiatoolbox', m.__version__, '安装成功')
+    print('-> 点「代码执行程序 → 重启会话」，然后从 §3 继续')
+except Exception as e:
+    print()
+    print('安装失败:', e)
+    print('别继续。把上面 pip 的报错发出来。')
+    sys.exit(1)
 """)
 
 md("""
@@ -123,8 +142,10 @@ md("""
    若只有一两百，说明分辨率又错了，**立刻停下来查**，不要开全量
 """)
 code("""
-import os, csv, time, joblib, cv2
+import os, csv, time, joblib, cv2, tiatoolbox
 from tiatoolbox.models import NucleusInstanceSegmentor
+
+print('tiatoolbox', tiatoolbox.__version__, '<- 记下这个版本号，所有来源必须同一个')
 
 TYPE_NAMES = {0: 'background', 1: 'neoplastic', 2: 'inflammatory',
               3: 'connective', 4: 'dead', 5: 'epithelial'}
@@ -132,16 +153,44 @@ HV_MPP = 0.25
 N_POST = min(8, max(1, os.cpu_count() - 2))   # 后处理是瓶颈，留 2 核给数据加载
 BATCH = 32                                     # A100 显存充裕；T4 上改回 8
 
-seg = NucleusInstanceSegmentor(pretrained_model='hovernet_fast-pannuke',
-                               num_loader_workers=2, num_postproc_workers=N_POST,
-                               batch_size=BATCH, auto_generate_mask=False)
+
+def make_seg(model='hovernet_fast-pannuke'):
+    \"\"\"2.0 起构造器接受 device=，1.x 不接受；两种都试。\"\"\"
+    kw = dict(pretrained_model=model, num_loader_workers=2,
+              num_postproc_workers=N_POST, batch_size=BATCH,
+              auto_generate_mask=False)
+    try:
+        return NucleusInstanceSegmentor(device='cuda', **kw)
+    except TypeError:
+        return NucleusInstanceSegmentor(**kw)
+
+
+def run_seg(seg, paths, save_dir):
+    \"\"\"2.0 把 predict() 改名 run()、on_gpu= 改成 device=。
+
+    两个名字都试，因为 Colab 装到哪个大版本不由我们决定，而调错的表现是
+    TypeError 而不是安静的错误结果 —— 这一点比大多数别的坑友好。
+    \"\"\"
+    for call in (
+        lambda: seg.run(paths, mode='tile', device='cuda',
+                        crash_on_exception=True, save_dir=save_dir),
+        lambda: seg.predict(paths, mode='tile', on_gpu=True,
+                            crash_on_exception=True, save_dir=save_dir),
+    ):
+        try:
+            return call()
+        except (AttributeError, TypeError):
+            continue
+    raise RuntimeError('predict/run 两种调用都不被接受，检查 tiatoolbox 版本')
+
+
+seg = make_seg()
 print('后处理 worker: %d, batch: %d' % (N_POST, BATCH))
 
 d = root + '/crops_hv/real_HE'
 probe = [os.path.join(d, f) for f in sorted(os.listdir(d))[:4]]
 t0 = time.time()
-res = seg.predict(probe, mode='tile', on_gpu=True, crash_on_exception=True,
-                  save_dir='/content/_probe')
+res = run_seg(seg, probe, '/content/_probe')
 dt = time.time() - t0
 
 for p, rr in res:
@@ -201,8 +250,7 @@ for src in sorted(os.listdir(root + '/crops_hv')):
     save = '/content/_hv/' + src
     if os.path.exists(save):
         shutil.rmtree(save)
-    res = seg.predict([os.path.join(d, f) for f in todo], mode='tile', on_gpu=True,
-                      crash_on_exception=True, save_dir=save)
+    res = run_seg(seg, [os.path.join(d, f) for f in todo], save)
     n = 0
     for p, rr in res:
         rid = os.path.splitext(os.path.basename(p))[0]
@@ -272,9 +320,7 @@ RUN_SECOND = False   # 改 True 再运行
 if not RUN_SECOND:
     print('跳过')
 else:
-    seg2 = NucleusInstanceSegmentor(pretrained_model='hovernet_fast-monusac',
-                                    num_loader_workers=2, num_postproc_workers=N_POST,
-                                    batch_size=BATCH, auto_generate_mask=False)
+    seg2 = make_seg('hovernet_fast-monusac')
     out2 = os.path.join(OUT, 'hv_hovernet_fast_monusac.csv')
     done2 = set()
     if os.path.exists(out2):
@@ -298,8 +344,7 @@ else:
         save = '/content/_hv2/' + src
         if os.path.exists(save):
             shutil.rmtree(save)
-        res = seg2.predict([os.path.join(d, f) for f in todo], mode='tile',
-                           on_gpu=True, crash_on_exception=True, save_dir=save)
+        res = run_seg(seg2, [os.path.join(d, f) for f in todo], save)
         for p, rr in res:
             rid = os.path.splitext(os.path.basename(p))[0]
             for k, v in joblib.load(rr + '.dat').items():
