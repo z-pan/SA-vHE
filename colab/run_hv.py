@@ -53,6 +53,7 @@ PROBE = _g.get('PROBE', False)
 NW = _g.get('NW', min(8, max(1, os.cpu_count() - 2)))
 BATCH = _g.get('BATCH', 32)
 MODEL = _g.get('MODEL', 'hovernet_fast-pannuke')
+CHUNK = _g.get('CHUNK', 20)   # regions between writes to Drive; see the loop below
 
 seg = MultiTaskSegmentor(model=MODEL, batch_size=BATCH, num_workers=NW,
                          device='cuda', verbose=False)
@@ -200,24 +201,34 @@ else:
         if not todo:
             print('%s: done already' % src)
             continue
-        save = '/content/_hv/' + src
-        if os.path.exists(save):
-            shutil.rmtree(save)
-        paths = [os.path.join(d, f) for f in todo]
-        res = run_seg(paths, save)
+        # Chunked, not one call per source. The CSV is the resume record and it is
+        # only written after a call returns, so a runtime that dies mid-source loses
+        # the whole source -- about ten minutes at 148 regions. Colab reclaims the VM
+        # roughly 90 minutes after the browser disconnects, and /content goes with it,
+        # so an unattended run has to expect this. At CHUNK regions the loss is a
+        # couple of minutes.
         n = 0
-        for p, db in _pairs(res, paths):
-            rid = os.path.splitext(os.path.basename(str(p)))[0]
-            for v in read_store(db):
-                w.writerow([src, rid, v['key'], v['type'], v['type_name'],
-                            round(v['area_px'], 1), round(v['cx'], 1),
-                            round(v['cy'], 1), round(v['prob'], 3)])
-                n += 1
-        # Flushed per source, so a dropped session loses at most one source and the
-        # skip list above picks up where it stopped.
-        fh.flush()
-        os.fsync(fh.fileno())
-        print('%s: %d regions, %d nuclei, %.0fs elapsed'
+        for c0 in range(0, len(todo), CHUNK):
+            part = todo[c0:c0 + CHUNK]
+            save = '/content/_hv/%s_%d' % (src, c0)
+            if os.path.exists(save):
+                shutil.rmtree(save)
+            paths = [os.path.join(d, f) for f in part]
+            res = run_seg(paths, save)
+            for p, db in _pairs(res, paths):
+                rid = os.path.splitext(os.path.basename(str(p)))[0]
+                for v in read_store(db):
+                    w.writerow([src, rid, v['key'], v['type'], v['type_name'],
+                                round(v['area_px'], 1), round(v['cx'], 1),
+                                round(v['cy'], 1), round(v['prob'], 3)])
+                    n += 1
+            fh.flush()
+            os.fsync(fh.fileno())
+            shutil.rmtree(save, ignore_errors=True)   # keeps /content from filling
+            print('  %s %d/%d regions, %d nuclei so far, %.0fs'
+                  % (src, min(c0 + CHUNK, len(todo)), len(todo), n,
+                     time.time() - t0), flush=True)
+        print('%s: done, %d regions, %d nuclei, %.0fs elapsed'
               % (src, len(todo), n, time.time() - t0), flush=True)
     fh.close()
     print()
