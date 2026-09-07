@@ -3,7 +3,14 @@ from data.base_dataset import BaseDataset, get_transform, new_transformA, new_tr
 from data.image_folder import make_dataset
 from PIL import Image
 import random
-from libtiff import TIFF, TIFFimage
+# libtiff is imported but never used: the only call sites (option#2, reading .tiff
+# through it) are commented out, and util/util.py already has this import commented
+# out for the same reason. It is not installable on Colab's Python 3.13, so a hard
+# import here stopped training on a dependency the code does not need.
+try:
+    from libtiff import TIFF, TIFFimage
+except ImportError:
+    TIFF = TIFFimage = None
 import tifffile as tiff
 import torch
 import numpy as np
@@ -144,7 +151,14 @@ from data.base_dataset import BaseDataset, get_transform, new_transformA, new_tr
 from data.image_folder import make_dataset
 from PIL import Image
 import random
-from libtiff import TIFF, TIFFimage
+# libtiff is imported but never used: the only call sites (option#2, reading .tiff
+# through it) are commented out, and util/util.py already has this import commented
+# out for the same reason. It is not installable on Colab's Python 3.13, so a hard
+# import here stopped training on a dependency the code does not need.
+try:
+    from libtiff import TIFF, TIFFimage
+except ImportError:
+    TIFF = TIFFimage = None
 import tifffile as tiff
 import torch
 import numpy as np
