@@ -52,6 +52,10 @@ class CycleGANModel(BaseModel):
             # method without it. At 0 the call is skipped entirely rather than
             # multiplied by zero: content_loss() also writes saliency maps to disk on
             # every iteration, which is pure cost once the term is switched off.
+            parser.add_argument('--verbose_shapes', action='store_true',
+                                help='Print the input tensor shape every iteration. '
+                                     'Off by default: it was unconditional, and on '
+                                     'Colab stdout goes over a websocket.')
             parser.add_argument('--lambda_content', type=float, default=1.0,
                                 help='Weight on the UTOM saliency/content loss. '
                                      '0 gives vanilla CycleGAN with everything else '
@@ -141,7 +145,8 @@ class CycleGANModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        print("real_A shape: ", self.real_A.shape)
+        if getattr(self.opt, "verbose_shapes", False):
+            print("real_A shape: ", self.real_A.shape)
         self.fake_B = self.netG_A(self.real_A)  # G_A(A)
         self.rec_A = self.netG_B(self.fake_B)   # G_B(G_A(A))
         self.fake_A = self.netG_B(self.real_B)  # G_B(B)

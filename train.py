@@ -51,7 +51,12 @@ if __name__ == '__main__':
             total_iters += opt.batch_size
             epoch_iter += opt.batch_size
             opt.counter = total_iters
-            print('total_iters ----->',total_iters,' epoch_iter ----->',epoch_iter,' opt.counter ----->',opt.counter,' i ----->',i)
+            if total_iters % opt.print_freq == 0:
+                # Was unconditional. On Colab the notebook streams stdout over a
+                # websocket, so a print on every iteration is not free -- it shares
+                # the loop with a 0.5 s training step and the run is 232,800 steps.
+                print('total_iters ----->', total_iters, ' epoch_iter ----->',
+                      epoch_iter, ' opt.counter ----->', opt.counter, ' i ----->', i)
             model.set_input(data)         # unpack data from dataset and apply preprocessing
             model.optimize_parameters()   # calculate loss functions, get gradients, update network weights
 
