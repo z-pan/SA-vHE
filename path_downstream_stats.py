@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import os
 
 import cv2
@@ -149,6 +150,8 @@ def main():
     ap.add_argument('--root', default=ROOT)
     ap.add_argument('--out', default=ROOT + '/cp_morphology.csv')
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--resume', action='store_true',
+                    help='Keep sources already in the output and append the rest.')
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(args.manifest, encoding='utf-8-sig')))
@@ -189,9 +192,32 @@ def main():
     cols = ['n', 'density', 'size_ratio', 'area_ratio', 'size_cv', 'solidity',
             'circularity', 'hema_od', 'hema_sd', 'area_um2', 'eqdiam_um', 'ecc',
             'nn_um', 'area_p90']
-    out = []
+    # Written per source rather than accumulated and dumped at the end. Nineteen
+    # sources held in memory was enough to get the process killed on a 16 GB machine,
+    # and because the single write came last, twelve finished sources were lost with
+    # it. Appending as we go also makes the run resumable: a source already present
+    # in the output is skipped.
+    fields = ['source', 'id', 'half', 'mpp'] + cols
+    done = set()
+    if os.path.exists(args.out) and args.resume:
+        with io.open(args.out, encoding='utf-8') as fh:
+            for r in csv.DictReader(fh):
+                done.add(r['source'])
+        # real_HE writes real_HE_half rows too; neither is complete without the other
+        if 'real_HE' in done and 'real_HE_half' not in done:
+            done.discard('real_HE')
+        print('already present, skipping: %s' % ', '.join(sorted(done)))
+    fresh = not (args.resume and os.path.exists(args.out))
+    fh = io.open(args.out, 'w' if fresh else 'a', newline='', encoding='utf-8')
+    w = csv.DictWriter(fh, fieldnames=fields)
+    if fresh:
+        w.writeheader()
+    total = 0
     for src in srcs:
+        if src in done:
+            continue
         d = os.path.join(args.root, 'cp', src)
+        rows = []
         for f in sorted(os.listdir(d)):
             rid = f[:-4]
             lab = imread_u(os.path.join(d, f))
@@ -201,24 +227,22 @@ def main():
             rgb = source_rgb(src, rid)
             p = props(lab, mpp, rgb=rgb)
             if p:
-                out.append(dict(source=src, id=rid, half='', mpp=round(mpp, 4), **p))
+                rows.append(dict(source=src, id=rid, half='', mpp=round(mpp, 4), **p))
             if src == 'real_HE':
-                # split-half floor: two halves of the same region, same stain, same
-                # scanner, differing only in which tissue is on each side
                 for h in (0, 1):
                     ph = props(lab, mpp, half=h, rgb=rgb)
                     if ph:
-                        out.append(dict(source='real_HE_half', id=rid, half=str(h),
-                                        mpp=round(mpp, 4), **ph))
-        print(f'{src}: done', flush=True)
-
-    with open(args.out, 'w', newline='', encoding='utf-8') as fh:
-        w = csv.DictWriter(fh, fieldnames=['source', 'id', 'half', 'mpp'] + cols)
-        w.writeheader()
-        for r in out:
+                        rows.append(dict(source='real_HE_half', id=rid, half=str(h),
+                                         mpp=round(mpp, 4), **ph))
+        for r in rows:
             w.writerow({k: (round(v, 4) if isinstance(v, float) else v)
                         for k, v in r.items()})
-    print(f'{len(out)} rows -> {args.out}')
+        fh.flush()
+        os.fsync(fh.fileno())
+        total += len(rows)
+        print(f'{src}: {len(rows)} rows', flush=True)
+    fh.close()
+    print(f'{total} rows -> {args.out}')
 
 
 if __name__ == '__main__':

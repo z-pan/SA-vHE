@@ -250,6 +250,8 @@ def main():
                     default='results/path_screen/survey/_candidates/tpaf_links.csv')
     ap.add_argument('--out',
                     default='results/path_screen/survey/_vhe/compare/vhe_compare.html')
+    ap.add_argument('--variant', action='append', default=None,
+                    help='Restrict to these variants, in this order.')
     ap.add_argument('--px', type=int, default=300)
     ap.add_argument('--quality', type=int, default=80)
     ap.add_argument('--view_um', type=float, default=0.5,
@@ -266,6 +268,13 @@ def main():
             if r.get('structures'):
                 struct[r['id']] = r['structures'].split()
     variants = sorted({r['variant'] for r in met} - {'real_HE'})
+    if args.variant:
+        # Thirteen columns is not a comparison anyone can hold in their head. Restrict
+        # to the ones a question is being asked about, in the order given.
+        missing = [v for v in args.variant if v not in variants]
+        if missing:
+            raise SystemExit('not collected yet: ' + ', '.join(missing))
+        variants = list(args.variant)
     by = collections.defaultdict(dict)
     for r in met:
         by[r['id']][r['variant']] = r

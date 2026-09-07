@@ -45,7 +45,18 @@ SUR = 'results/path_screen/survey/_vhe'
 DIAM_UM = 12.0          # physical nucleus diameter fed to base cpsam
 TPAF_MPP = 0.621
 TPAF_MODEL, TPAF_FLOW, TPAF_DIAM = 'cpsam_20260228_gray', 0.85, 30.0
-VHE_VARIANTS = ('gray', 'gray_final', 'nuc_hi_final', 'nuc_flat', 'nuc_signed')
+def vhe_variants():
+    """Every variant present under stained/, rather than a hand-kept list.
+
+    The list was edited twice as variants were added and both times something was
+    left out silently -- there is no error for a variant that simply never gets
+    segmented, only a source missing from the comparison table later. path_downstream_stats.py
+    already discovers its sources this way; this brings the two into line. Use
+    --source to restrict.
+    """
+    d = os.path.join(SUR, 'stained')
+    return tuple(sorted(v for v in os.listdir(d)
+                        if os.path.isdir(os.path.join(d, v))))
 
 
 def imread_u(path, flags=cv2.IMREAD_UNCHANGED):
@@ -71,7 +82,7 @@ def sources(rows):
         tp = imread_u(r['patch_path'])
         if tp is not None:
             yield 'TPAF', r['id'], tp[y:y + h, x:x + w], TPAF_MPP
-        for v in VHE_VARIANTS:
+        for v in vhe_variants():
             p = os.path.join(SUR, 'stained', v, name + '.png')
             if os.path.exists(p):
                 im = imread_u(p)
@@ -103,10 +114,16 @@ def main():
         # Write the HoVer-Net inputs, resampled to its training resolution, plus a
         # scale table so the segmentation can be brought back to physical units.
         n = 0
-        with open(os.path.join(args.out, 'crop_scale.csv'), 'w', newline='',
-                  encoding='utf-8') as fh:
+        scale_csv = os.path.join(args.out, 'crop_scale.csv')
+        keep = []
+        if os.path.exists(scale_csv):
+            with open(scale_csv, encoding='utf-8') as fh:
+                keep = [r for r in list(csv.reader(fh))[1:]
+                        if r and not (want is None or r[0] in want)]
+        with open(scale_csv, 'w', newline='', encoding='utf-8') as fh:
             w = csv.writer(fh)
             w.writerow(['source', 'id', 'src_mpp', 'out_mpp', 'out_w', 'out_h'])
+            w.writerows(keep)
             for src, rid, im, mpp in sources(rows):
                 if src == 'TPAF' or (want and src not in want):
                     continue

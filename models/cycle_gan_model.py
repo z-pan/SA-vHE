@@ -47,6 +47,15 @@ class CycleGANModel(BaseModel):
         if is_train:
             parser.add_argument('--lambda_A', type=float, default=10.0, help='weight for cycle loss (A -> B -> A)')
             parser.add_argument('--lambda_B', type=float, default=10.0, help='weight for cycle loss (B -> A -> B)')
+            # UTOM is CycleGAN plus this saliency (content) constraint, and the term was
+            # previously added to loss_G unweighted, so there was no way to run the
+            # method without it. At 0 the call is skipped entirely rather than
+            # multiplied by zero: content_loss() also writes saliency maps to disk on
+            # every iteration, which is pure cost once the term is switched off.
+            parser.add_argument('--lambda_content', type=float, default=1.0,
+                                help='Weight on the UTOM saliency/content loss. '
+                                     '0 gives vanilla CycleGAN with everything else '
+                                     'identical.')
             #parser.add_argument('--threshold_A', type=float, default=20, help='weight for content loss in domain A')
             #parser.add_argument('--threshold_B', type=float, default=150, help='weight for content loss in domain B')
             parser.add_argument('--threshold_A', type=float, default=70, help='weight for content loss in domain A')
@@ -199,7 +208,9 @@ class CycleGANModel(BaseModel):
         self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
         # Forward cycle loss || G_B(G_A(A)) - A||
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
-        content_loss_value = self.content_loss()
+        lambda_content = getattr(self.opt, 'lambda_content', 1.0)
+        content_loss_value = (self.content_loss() * lambda_content
+                              if lambda_content > 0 else 0.0)
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
