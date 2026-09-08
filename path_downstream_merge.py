@@ -19,10 +19,12 @@ Two conventions, both learned the hard way in this project:
   correlates perfectly. Lin's CCC and the Bland-Altman bias catch a systematic
   offset; Pearson r does not, and is shown only so the gap is visible.
 
-  Every measure against its own floor. Two halves of one real H&E region differ by
-  an amount that owes nothing to virtual staining. Reported as a percentage of that
-  floor, because a raw CCC of 0.1 means something different when the floor is 0.76
-  (a real failure) than when it is 0.12 (a measure that cannot rank anything).
+  No split-half reference. Measuring two halves of one region and comparing them was
+  used here as a stand-in for how well a measure agrees with itself. It is not that: it
+  measures how spatially uniform the tissue is at that scale -- both halves of a tumour
+  region are tumour -- so a method scored as a percentage of it was being scored against
+  tissue homogeneity. Dropped 2026-09-06; path_downstream_stats.py no longer writes the
+  rows either.
 """
 
 from __future__ import annotations
@@ -56,9 +58,7 @@ def load_cellpose(path):
     rows = list(csv.DictReader(open(path, encoding='utf-8')))
     by = {}
     for r in rows:
-        key = ('real_HE_half%s' % r['half']) if r['source'] == 'real_HE_half' \
-            else r['source']
-        by[(r['id'], key)] = r
+        by[(r['id'], r['source'])] = r
     return by
 
 
@@ -119,25 +119,17 @@ def main():
 
     cp = load_cellpose(args.cp)
     ids = sorted({k[0] for k in cp if k[1] == 'real_HE'})
-    srcs = sorted({k[1] for k in cp} - {'real_HE', 'real_HE_half0', 'real_HE_half1'})
+    srcs = sorted({k[1] for k in cp} - {'real_HE'})
     num = lambda r, k: (float(r[k]) if r and r.get(k) not in (None, '', 'nan')
                         else np.nan)
 
-    pid = [i for i in ids if (i, 'real_HE_half0') in cp and (i, 'real_HE_half1') in cp]
     print('=' * 78)
-    print('CELLPOSE  (%d regions, floor from %d split halves of real H&E)'
-          % (len(ids), len(pid)))
+    print('CELLPOSE  (%d regions)' % len(ids))
     print('=' * 78)
     for tier, keys in (('TIER 1  grading criteria', TIER1),
                        ('TIER 2  supporting', TIER2),
                        ('TIER 3  not graded on', TIER3)):
-        floor = {}
-        for k in keys:
-            a = np.array([num(cp[(i, 'real_HE_half0')], k) for i in pid])
-            b = np.array([num(cp[(i, 'real_HE_half1')], k) for i in pid])
-            floor[k], _, _, _ = ccc(a, b)
         print('\n%s' % tier)
-        print('%-16s' % 'floor CCC' + ''.join('%16.2f' % floor[k] for k in keys))
         print('%-16s' % '' + ''.join('%16s' % k[:15] for k in keys))
         for s in srcs:
             cells = []
@@ -146,13 +138,9 @@ def main():
                               if (i, s) in cp])
                 y = np.array([num(cp.get((i, s)), k) for i in ids if (i, s) in cp])
                 c, _, bias, _ = ccc(x, y)
-                f = floor[k]
-                pct = ('%3.0f%%' % (100 * c / f)) if f and f > 0.05 else '  - '
-                cells.append('%5.2f %s %+4.0f%%' % (c, pct, 100 * bias))
+                cells.append('%5.2f %+5.0f%%' % (c, 100 * bias))
             print('%-16s' % s + ''.join('%16s' % v for v in cells))
-    print('\n  cell = CCC, percent of floor, Bland-Altman bias vs real H&E')
-    print('  a dash means the floor is under 0.05: the measure does not agree with')
-    print('  itself, so no method can be ranked on it')
+    print('\n  cell = CCC and Bland-Altman bias against real H&E')
 
     if not os.path.exists(args.hv):
         print('\n(no HoVer-Net csv at %s yet)' % args.hv)

@@ -149,6 +149,58 @@ def enhance_nuclei_v2(gray, mask, amp=97.0, feather=1.0, ring_um=0.0, ring_amp=0
     return np.clip(gray.astype(np.float32) + add, 0, 255).astype(np.uint8), 0
 
 
+# Haematoxylin against signed distance to the nucleus boundary, measured on the 148
+# real H&E regions with their stored masks (negative = inside, microns). Normalised
+# to (H - cytoplasm) / (peak - cytoplasm).
+#
+#   d      -1.75  -1.25  -0.75  -0.25  +0.25  +0.75  +1.25  +1.75  +2.25  +2.75
+#   H      .0305  .0298  .0251  .0190  .0147  .0118  .0088  .0065  .0060  .0058
+#
+# Held at 1.0 for d <= -1.75 rather than following the measurement further in. The
+# deeper bins are only reachable by large nuclei -- a 4 um nucleus has a 2 um radius
+# -- so the apparent decline toward the centre is confounded with nucleus size, and
+# encoding it would impose big-nucleus chromatin on every nucleus.
+#
+# The +0.75 sample sat above +0.25 in the raw measurement; taken as noise and made
+# monotonic outward.
+REF_D = [-99.0, -1.75, -1.25, -0.75, -0.25, 0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 99.0]
+REF_S = [1.000, 1.000, 0.972, 0.784, 0.540, 0.368, 0.252, 0.132, 0.040, 0.020,
+         0.000, 0.000]
+
+
+def enhance_nuclei_profile(gray, mask, amp=97.0, mpp=0.621, ring_amp=0.0):
+    """Shape the boost like the haematoxylin actually falls in real H&E.
+
+    The plateau variants fixed the size bias but kept a step edge: the boost ends
+    within a pixel of the mask, where real H&E takes about 4 um to go from nuclear
+    to cytoplasmic -- 0.0305 at 1.75 um inside, 0.0251 at 0.75 inside, 0.0147 just
+    outside, 0.0055 by 2.2 um out. A step there is not what the tissue does, and
+    the generator renders the mismatch as an edge.
+
+    Legacy's rim was worse for a different reason: blurring the mask and keeping
+    only what exceeds 158 puts the boost a few pixels INSIDE the boundary, leaving
+    an un-boosted band that the baseline renders pale -- the white ring, a 66% dip
+    in haematoxylin over the last 1.6 um where real H&E is flat.
+
+    ring_amp additionally suppresses beyond the nucleus. The gap to real H&E is
+    mostly there: the surround carries about 1.8x too much haematoxylin, while
+    nuclear haematoxylin is already within a few percent.
+    """
+    m = (mask > 127).astype(np.uint8)
+    if m.sum() == 0:
+        return gray.copy(), 0
+    din = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    dout = cv2.distanceTransform(1 - m, cv2.DIST_L2, 5)
+    d = (dout - din) * mpp
+    s = np.interp(d, REF_D, REF_S).astype(np.float32)
+    add = amp * s
+    if ring_amp > 0:
+        # weight the suppression by how far outside we are, peaking where the
+        # profile says cytoplasm should already be clean
+        add = add - ring_amp * np.clip((d - 0.25) / 2.0, 0, 1).astype(np.float32)
+    return np.clip(gray.astype(np.float32) + add, 0, 255).astype(np.uint8), 0
+
+
 def stain(G, gray, device, tile=204, patch=512, stride=102, feather=48, batch=8,
           min_signal=0):
     """Tile at native scale, upscale each window to the model's scale, infer, come back.
@@ -228,7 +280,8 @@ def main():
                          'slide mosaic: the mosaic must be the same dtype and channel '
                          'order as the source FOVs, or the BGR2GRAY below lands on a '
                          'different input distribution than the 148-region run used.')
-    ap.add_argument('--enh', choices=('legacy', 'flat', 'signed'), default='legacy',
+    ap.add_argument('--enh', choices=('legacy', 'flat', 'signed', 'profile'),
+                    default='legacy',
                     help='How the nuclei mask modifies the input. legacy reproduces '
                          'make_overlap_patches.py bit for bit, including its uint8 '
                          'wrap and its failure to touch nuclei under ~5 um. flat gives '
@@ -386,6 +439,9 @@ def main():
                     raise SystemExit(f'{name}: mask {m.shape} != patch {gray.shape}')
                 if args.enh == 'legacy':
                     enh, over = enhance_nuclei(gray, m)
+                elif args.enh == 'profile':
+                    enh, over = enhance_nuclei_profile(
+                        gray, m, args.enh_amp, ring_amp=args.enh_ring_amp)
                 else:
                     enh, over = enhance_nuclei_v2(
                         gray, m, args.enh_amp, args.enh_feather,

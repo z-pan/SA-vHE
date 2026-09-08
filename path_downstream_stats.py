@@ -203,9 +203,6 @@ def main():
         with io.open(args.out, encoding='utf-8') as fh:
             for r in csv.DictReader(fh):
                 done.add(r['source'])
-        # real_HE writes real_HE_half rows too; neither is complete without the other
-        if 'real_HE' in done and 'real_HE_half' not in done:
-            done.discard('real_HE')
         print('already present, skipping: %s' % ', '.join(sorted(done)))
     fresh = not (args.resume and os.path.exists(args.out))
     fh = io.open(args.out, 'w' if fresh else 'a', newline='', encoding='utf-8')
@@ -228,12 +225,12 @@ def main():
             p = props(lab, mpp, rgb=rgb)
             if p:
                 rows.append(dict(source=src, id=rid, half='', mpp=round(mpp, 4), **p))
-            if src == 'real_HE':
-                for h in (0, 1):
-                    ph = props(lab, mpp, half=h, rgb=rgb)
-                    if ph:
-                        rows.append(dict(source='real_HE_half', id=rid, half=str(h),
-                                         mpp=round(mpp, 4), **ph))
+            # No real_HE_half rows. Splitting a region in two and measuring both
+            # halves was used as a reference for how well a measure agrees with
+            # itself; it does not do that. It measures how spatially uniform the
+            # tissue is at that scale -- both halves of a tumour region are tumour --
+            # so a high value says nothing about the measure's reproducibility.
+            # Judged unusable 2026-09-06; the rows are gone so nothing can quote them.
         for r in rows:
             w.writerow({k: (round(v, 4) if isinstance(v, float) else v)
                         for k, v in r.items()})

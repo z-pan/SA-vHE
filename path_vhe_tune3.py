@@ -55,6 +55,9 @@ PNAMES = ['h_nuc', 'h_dense', 'h_pale', 'e_nuc', 'e_dense', 'e_pale']
 # once, and an optimum on a bound is not an optimum, it is the largest or
 # smallest value that was allowed. h_pale went to 0.20 on the first run here too.
 BOUNDS = [(0.02, 8.0)] * 3 + [(0.02, 4.0)] * 3
+# Overridable, because a bound chosen for one generator silently handicaps another:
+# the CycleGAN baseline pushed all three eosin multipliers to the 4.0 ceiling, which
+# is not an optimum, it is the largest value that was allowed.
 
 
 def imread_u(path, flags=cv2.IMREAD_UNCHANGED):
@@ -154,7 +157,11 @@ def main():
     ap.add_argument('--maxiter', type=int, default=400)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--apply', default=None)
+    ap.add_argument('--max_h', type=float, default=8.0)
+    ap.add_argument('--max_e', type=float, default=4.0)
     args = ap.parse_args()
+    global BOUNDS
+    BOUNDS = [(0.02, args.max_h)] * 3 + [(0.02, args.max_e)] * 3
 
     bases = args.base or ['gray_globalonly', 'gray']
     rows = [r for r in csv.DictReader(io.open(args.manifest, encoding='utf-8-sig'))
